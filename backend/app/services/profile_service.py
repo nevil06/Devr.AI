@@ -184,10 +184,12 @@ class ProfileService:
 
                 update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-                # 3. Perform atomic update
+                # 3. Perform atomic update with optimistic concurrency predicate applied on every attempt
                 query = self.supabase.table("users").update(update_data).eq("id", str(user_id))
-                if prev_updated_at and attempt < max_retries - 1:
+                if prev_updated_at is not None:
                     query = query.eq("updated_at", prev_updated_at)
+                else:
+                    query = query.is_("updated_at", "null")
 
                 update_response = await query.execute()
 

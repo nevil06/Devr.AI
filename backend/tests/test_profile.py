@@ -2,7 +2,7 @@
 Tests for ProfileService and Profile API endpoints.
 
 Covers profile retrieval, persistence of updates, clearing fields,
-optimistic concurrency, and API integration roundtrips.
+optimistic concurrency with null and non-null updated_at, and API integration roundtrips.
 """
 
 import os
@@ -37,18 +37,36 @@ class MockTableQuery:
         """Initialize query builder with expected return data."""
         self._execute_data = execute_data
         self.last_update_data = None
+        self.applied_eq = {}
+        self.applied_is = {}
 
     def select(self, *args, **kwargs):
         """Mock select call."""
         return self
 
     def update(self, update_data, *args, **kwargs):
-        """Mock update call and record last update payload."""
+        """Mock update call, merge update_data into persistent row, and record payload."""
         self.last_update_data = update_data
+        if self._execute_data and isinstance(self._execute_data[0], dict):
+            updated_row = dict(self._execute_data[0])
+            for k, v in update_data.items():
+                if k == "skills" and isinstance(v, dict) and isinstance(updated_row.get("skills"), dict):
+                    merged_skills = dict(updated_row["skills"])
+                    merged_skills.update(v)
+                    updated_row["skills"] = merged_skills
+                else:
+                    updated_row[k] = v
+            self._execute_data = [updated_row]
         return self
 
-    def eq(self, *args, **kwargs):
-        """Mock eq filter call."""
+    def eq(self, column, value, *args, **kwargs):
+        """Mock eq filter call and record column filter."""
+        self.applied_eq[column] = value
+        return self
+
+    def is_(self, column, value, *args, **kwargs):
+        """Mock is_ filter call and record column filter."""
+        self.applied_is[column] = value
         return self
 
     def limit(self, *args, **kwargs):
@@ -127,7 +145,6 @@ async def test_update_profile_persistence():
     }
 
     service = ProfileService()
-    # 1st select (check), 2nd update (write), 3rd select (re-fetch verification)
     select_query = MockTableQuery([existing_user])
     update_query = MockTableQuery([updated_user])
     refetch_query = MockTableQuery([updated_user])
@@ -155,7 +172,38 @@ async def test_update_profile_persistence():
     assert update_query.last_update_data["display_name"] == "New Name"
     assert update_query.last_update_data["github_username"] == "newgithub"
     assert update_query.last_update_data["skills"]["company"] == "New Corp"
+    assert update_query.applied_eq["updated_at"] == "2026-01-01T00:00:00Z"
     assert "updated_at" in update_query.last_update_data
+
+
+@pytest.mark.asyncio
+async def test_update_profile_null_updated_at_predicate():
+    """Test optimistic concurrency predicate when existing record has null updated_at."""
+    user_id = uuid4()
+    existing_user = {
+        "id": str(user_id),
+        "display_name": "Sarah",
+        "updated_at": None,
+    }
+
+    updated_user = {
+        "id": str(user_id),
+        "display_name": "Sarah Updated",
+        "updated_at": "2026-01-02T00:00:00Z",
+    }
+
+    service = ProfileService()
+    select_query = MockTableQuery([existing_user])
+    update_query = MockTableQuery([updated_user])
+    refetch_query = MockTableQuery([updated_user])
+
+    service.supabase.table = MagicMock(side_effect=[select_query, update_query, refetch_query])
+
+    update_payload = ProfileUpdateRequest(display_name="Sarah Updated")
+    result = await service.update_profile(user_id, update_payload)
+
+    assert update_query.applied_is["updated_at"] == "null"
+    assert result.display_name == "Sarah Updated"
 
 
 @pytest.mark.asyncio
@@ -194,7 +242,7 @@ async def test_update_profile_clear_github_handle():
 
 @pytest.mark.asyncio
 async def test_api_endpoints_roundtrip(monkeypatch):
-    """Test authenticated GET and PATCH /v1/profile routes with monkeypatch."""
+    """Test authenticated GET and PATCH /v1/profile routes verifying persisted fields."""
     test_user_id = uuid4()
 
     mock_user_db = {
@@ -210,10 +258,11 @@ async def test_api_endpoints_roundtrip(monkeypatch):
     app.include_router(profile_router, prefix="/v1/profile")
     app.dependency_overrides[get_current_user] = lambda: test_user_id
 
+    mock_query = MockTableQuery([mock_user_db])
     monkeypatch.setattr(
         profile_service.supabase,
         "table",
-        MagicMock(return_value=MockTableQuery([mock_user_db])),
+        MagicMock(return_value=mock_query),
     )
 
     transport = ASGITransport(app=app)
@@ -226,7 +275,7 @@ async def test_api_endpoints_roundtrip(monkeypatch):
         assert get_json["display_name"] == "Test User"
         assert get_json["company"] == "Test Co"
 
-        # 2. Test PATCH /v1/profile
+        # 2. Test PATCH /v1/profile with distinct updated response data
         patch_res = await client.patch(
             "/v1/profile",
             json={
@@ -238,3 +287,6 @@ async def test_api_endpoints_roundtrip(monkeypatch):
         assert patch_res.status_code == 200
         patch_json = patch_res.json()
         assert patch_json["id"] == str(test_user_id)
+        assert patch_json["display_name"] == "Updated Test User"
+        assert patch_json["bio"] == "New Bio"
+        assert patch_json["company"] == "Updated Co"
