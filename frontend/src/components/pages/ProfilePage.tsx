@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { toast } from 'react-hot-toast';
-import { User, Mail, Building, Globe, Github, Twitter, Edit, Camera, Save, Loader2 } from 'lucide-react';
+import { User, Mail, Building, Globe, Github, Twitter, Edit, Camera, Save, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 import { apiClient, ProfileResponse } from '../../lib/api';
 
 interface ProfileState {
@@ -16,67 +16,67 @@ interface ProfileState {
   avatar_url: string;
 }
 
-const DEFAULT_PROFILE: ProfileState = {
-  name: 'Sarah Chen',
+const DEFAULT_AVATAR = 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200';
+
+const EMPTY_PROFILE: ProfileState = {
+  name: '',
   role: 'Core Maintainer',
-  company: 'TechCorp Inc.',
-  email: 'sarah.chen@example.com',
-  website: 'https://sarahchen.dev',
-  github: '@sarahchen',
-  twitter: '@sarahchen_dev',
-  bio: 'Open source enthusiast and community builder. Working on developer tools and AI-powered solutions.',
-  avatar_url: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200',
+  company: '',
+  email: '',
+  website: '',
+  github: '',
+  twitter: '',
+  bio: '',
+  avatar_url: DEFAULT_AVATAR,
 };
 
 const ProfilePage = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [profile, setProfile] = useState<ProfileState>(DEFAULT_PROFILE);
-  const [originalProfile, setOriginalProfile] = useState<ProfileState>(DEFAULT_PROFILE);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [profile, setProfile] = useState<ProfileState>(EMPTY_PROFILE);
+  const [originalProfile, setOriginalProfile] = useState<ProfileState>(EMPTY_PROFILE);
 
   const mapResponseToState = (data: ProfileResponse): ProfileState => {
     return {
-      name: data.display_name || data.name || '',
-      role: data.role || data.skills?.role || 'Core Maintainer',
-      company: data.company || data.skills?.company || '',
-      email: data.email || '',
-      website: data.website || data.skills?.website || '',
-      github: data.github || (data.skills?.github ? data.skills.github : ''),
-      twitter: data.twitter || data.skills?.twitter || '',
-      bio: data.bio || '',
-      avatar_url: data.avatar_url || DEFAULT_PROFILE.avatar_url,
+      name: data.display_name ?? data.name ?? '',
+      role: data.role ?? data.skills?.role ?? 'Core Maintainer',
+      company: data.company ?? data.skills?.company ?? '',
+      email: data.email ?? '',
+      website: data.website ?? data.skills?.website ?? '',
+      github: data.github ?? (data.skills?.github ? data.skills.github : ''),
+      twitter: data.twitter ?? data.skills?.twitter ?? '',
+      bio: data.bio ?? '',
+      avatar_url: data.avatar_url ?? DEFAULT_AVATAR,
     };
   };
 
-  useEffect(() => {
-    let isMounted = true;
-    const fetchProfile = async () => {
-      try {
-        setIsLoading(true);
-        const data = await apiClient.getProfile();
-        if (isMounted && data) {
-          const loadedProfile = mapResponseToState(data);
-          setProfile(loadedProfile);
-          setOriginalProfile(loadedProfile);
-        }
-      } catch (error: any) {
-        console.error('Failed to fetch profile:', error);
-        // In case API returns 401 or offline, fallback to defaults smoothly
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
+  const fetchProfile = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      setLoadError(null);
+      const data = await apiClient.getProfile();
+      if (data) {
+        const loadedProfile = mapResponseToState(data);
+        setProfile(loadedProfile);
+        setOriginalProfile(loadedProfile);
       }
-    };
-
-    fetchProfile();
-    return () => {
-      isMounted = false;
-    };
+    } catch (error: any) {
+      console.error('Failed to fetch profile:', error);
+      const message = error?.response?.data?.detail || 'Failed to load profile. Please verify your connection and try again.';
+      setLoadError(message);
+    } finally {
+      setIsLoading(false);
+    }
   }, []);
 
+  useEffect(() => {
+    fetchProfile();
+  }, [fetchProfile]);
+
   const handleSave = async () => {
+    if (loadError) return;
     try {
       setIsSaving(true);
       const updated = await apiClient.updateProfile({
@@ -120,6 +120,23 @@ const ProfilePage = () => {
     );
   }
 
+  if (loadError) {
+    return (
+      <div className="max-w-4xl mx-auto flex flex-col items-center justify-center min-h-[400px] text-center p-6 bg-gray-900 rounded-xl border border-red-800/50">
+        <AlertCircle className="w-12 h-12 text-red-500 mb-4" />
+        <h2 className="text-xl font-semibold text-white mb-2">Unable to Load Profile</h2>
+        <p className="text-gray-400 text-sm max-w-md mb-6">{loadError}</p>
+        <button
+          onClick={fetchProfile}
+          className="px-4 py-2 bg-green-500 hover:bg-green-600 rounded-lg transition-colors flex items-center text-white text-sm font-medium"
+        >
+          <RefreshCw size={16} className="mr-2" />
+          Retry Loading
+        </button>
+      </div>
+    );
+  }
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -132,7 +149,7 @@ const ProfilePage = () => {
         <motion.button
           whileHover={{ scale: 1.05 }}
           whileTap={{ scale: 0.95 }}
-          disabled={isSaving}
+          disabled={isSaving || Boolean(loadError)}
           onClick={() => {
             if (isEditing) {
               handleSave();
@@ -176,7 +193,7 @@ const ProfilePage = () => {
           <div className="flex items-end -mt-12 mb-8">
             <div className="relative">
               <img
-                src={profile.avatar_url || DEFAULT_PROFILE.avatar_url}
+                src={profile.avatar_url || DEFAULT_AVATAR}
                 alt="Profile"
                 className="w-24 h-24 rounded-xl border-4 border-gray-900 object-cover"
               />

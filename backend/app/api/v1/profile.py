@@ -1,3 +1,9 @@
+"""
+Profile API Router.
+
+Provides endpoints for retrieving and partially updating user profile details.
+"""
+
 import logging
 from fastapi import APIRouter, HTTPException, Depends, status
 from uuid import UUID
@@ -13,9 +19,18 @@ profile_service = ProfileService()
 
 @router.get("", response_model=ProfileResponse)
 @router.get("/", response_model=ProfileResponse)
-async def get_profile(user_id: UUID = Depends(get_current_user)):
+async def get_profile(user_id: UUID = Depends(get_current_user)) -> ProfileResponse:
     """
     Get the authenticated user's profile.
+
+    Args:
+        user_id: Authenticated user's unique identifier extracted from JWT.
+
+    Returns:
+        ProfileResponse containing current profile details and metadata.
+
+    Raises:
+        HTTPException: 404 if profile does not exist, 500 on server error.
     """
     try:
         return await profile_service.get_profile(user_id)
@@ -31,14 +46,22 @@ async def get_profile(user_id: UUID = Depends(get_current_user)):
 
 @router.patch("", response_model=ProfileResponse)
 @router.patch("/", response_model=ProfileResponse)
-@router.put("", response_model=ProfileResponse)
-@router.put("/", response_model=ProfileResponse)
 async def update_profile(
     request: ProfileUpdateRequest,
     user_id: UUID = Depends(get_current_user),
-):
+) -> ProfileResponse:
     """
-    Update the authenticated user's profile.
+    Partially update the authenticated user's profile.
+
+    Args:
+        request: ProfileUpdateRequest containing optional fields to update.
+        user_id: Authenticated user's unique identifier extracted from JWT.
+
+    Returns:
+        ProfileResponse with the updated profile values.
+
+    Raises:
+        HTTPException: 404 if profile does not exist, 500 on update failure.
     """
     try:
         return await profile_service.update_profile(user_id, request)
